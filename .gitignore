@@ -1,0 +1,4 @@
+# 运行时与 adb 二进制不进仓库(zip 包里已有)
+runtime/
+adb/
+*.log

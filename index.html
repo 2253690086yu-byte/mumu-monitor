@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MuMu 模拟器内存监控</title>
+<style>
+  /* ===== 色板(已通过 validate_palette.js 校验) ===== */
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;      /* 图表表面 */
+    --page: #f9f9f7;           /* 页面底 */
+    --ink-1: #0b0b0b;
+    --ink-2: #52514e;
+    --ink-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;       /* 蓝系列色 */
+    --area-fill: rgba(42,120,214,0.10);
+    --meter-track: #cde2fb;    /* 同色相轨道 浅端 */
+    --bar-1: #1c5cab; --bar-2: #2a78d6; --bar-3: #5598e7;
+    --bar-4: #6da7ec; --bar-5: #86b6ef;
+    --status-good: #0ca30c; --status-warning: #fab219;
+    --status-serious: #ec835a; --status-critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --page: #0d0d0d;
+      --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --area-fill: rgba(57,135,229,0.14);
+      --meter-track: #184f95;
+      --bar-1: #86b6ef; --bar-2: #5598e7; --bar-3: #2a78d6;
+      --bar-4: #1c5cab; --bar-5: #184f95;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d;
+    --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+    --grid: #2c2c2a; --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5;
+    --area-fill: rgba(57,135,229,0.14);
+    --meter-track: #184f95;
+    --bar-1: #86b6ef; --bar-2: #5598e7; --bar-3: #2a78d6;
+    --bar-4: #1c5cab; --bar-5: #184f95;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink-1);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 24px 40px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  header h1 { font-size: 18px; font-weight: 600; margin: 0; }
+  .conn { font-size: 12.5px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--status-good); }
+  .dot.bad { background: var(--status-critical); }
+  #themeBtn {
+    margin-left: auto; border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--ink-2); border-radius: 6px; padding: 4px 10px; font-size: 12.5px; cursor: pointer;
+  }
+
+  /* ===== 实例标签页 ===== */
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tab {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-2);
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  .tab.active { border-color: var(--series-1); color: var(--ink-1); font-weight: 600; }
+  .tab .tdot { width: 8px; height: 8px; border-radius: 50%; }
+  .tab .pct { font-variant-numeric: tabular-nums; color: var(--ink-muted); font-size: 12px; }
+
+  .error-banner {
+    display: none; background: var(--surface-1); border: 1px solid var(--border);
+    border-left: 3px solid var(--status-critical); border-radius: 8px;
+    padding: 10px 14px; margin-bottom: 16px; color: var(--ink-2);
+  }
+
+  /* ===== KPI 行 ===== */
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px 12px;
+  }
+  .tile .label { font-size: 12.5px; color: var(--ink-2); margin-bottom: 6px; }
+  .tile .value { font-size: 30px; font-weight: 650; line-height: 1.1; }
+  .tile .unit { font-size: 15px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+  .tile .sub { font-size: 12px; color: var(--ink-muted); margin-top: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .spark { width: 100%; height: 26px; margin-top: 8px; display: block; }
+
+  .meter { height: 10px; border-radius: 5px; background: var(--meter-track); margin-top: 12px; overflow: hidden; }
+  .meter .fill { height: 100%; border-radius: 5px; background: var(--series-1); width: 0%; transition: width .3s; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); }
+  .chip .ic { width: 9px; height: 9px; border-radius: 50%; }
+
+  /* ===== 面板 ===== */
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-top: 12px;
+  }
+  .panel h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+  .panel .hint { font-size: 12px; color: var(--ink-muted); margin-bottom: 10px; }
+
+  .chart-box { position: relative; }
+  #chart { width: 100%; display: block; cursor: crosshair; }
+  .tooltip {
+    position: absolute; pointer-events: none; display: none; z-index: 5;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.12); padding: 7px 10px; font-size: 12.5px;
+    white-space: nowrap;
+  }
+  .tooltip .tt-t { color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+  .tooltip .tt-v { font-weight: 600; font-size: 14px; margin-top: 2px; }
+
+  /* ===== 进程列表(表格视图,含直接数值标签) ===== */
+  .proc-row {
+    display: grid; grid-template-columns: 260px 1fr 90px; gap: 10px; align-items: center;
+    padding: 5px 2px; font-size: 12.5px;
+  }
+  .proc-row .name { color: var(--ink-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .proc-row .pid { color: var(--ink-muted); font-size: 11.5px; }
+  .proc-row .track { height: 16px; position: relative; }
+  .proc-row .bar {
+    position: absolute; left: 0; top: 0; height: 100%; border-radius: 0 4px 4px 0;
+    min-width: 2px;
+  }
+  .proc-row .val { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  footer { margin-top: 14px; font-size: 12px; color: var(--ink-muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>MuMu 模拟器内存监控</h1>
+    <span class="conn"><span class="dot" id="connDot"></span><span id="connText">连接中…</span></span>
+    <button id="themeBtn" title="切换浅色 / 深色">🌓 主题</button>
+  </header>
+
+  <div class="tabs" id="tabs"></div>
+  <div class="error-banner" id="errBanner"></div>
+
+  <div class="kpi-row">
+    <div class="tile">
+      <div class="label">已用内存</div>
+      <div class="value"><span id="kUsed">—</span><span class="unit" id="kUsedUnit"></span></div>
+      <svg class="spark" id="sparkUsed"></svg>
+      <div class="sub"><span>总量 <span id="kTotal">—</span></span><span id="kDelta"></span></div>
+    </div>
+    <div class="tile">
+      <div class="label">可用内存 (MemAvailable)</div>
+      <div class="value"><span id="kAvail">—</span><span class="unit" id="kAvailUnit"></span></div>
+      <div class="sub"><span>空闲 <span id="kFree">—</span></span><span></span></div>
+    </div>
+    <div class="tile">
+      <div class="label">缓存 + Buffers</div>
+      <div class="value"><span id="kCache">—</span><span class="unit" id="kCacheUnit"></span></div>
+      <div class="sub"><span>Swap 已用 <span id="kSwap">—</span></span><span></span></div>
+    </div>
+    <div class="tile">
+      <div class="label">内存使用率</div>
+      <div class="value"><span id="kPct">—</span><span class="unit">%</span></div>
+      <div class="meter"><div class="fill" id="meterFill"></div></div>
+      <div class="sub"><span class="chip"><span class="ic" id="stIcon"></span><span id="stText">—</span></span><span></span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 id="chartTitle">已用内存趋势</h2>
+    <div class="hint">最近 3 分钟 · 悬停查看数值 · 每 1 秒刷新</div>
+    <div class="chart-box">
+      <svg id="chart" height="240"></svg>
+      <div class="tooltip" id="tooltip"><div class="tt-t"></div><div class="tt-v"></div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>进程内存排行 (PSS)</h2>
+    <div class="hint">按 PSS 排序的前 10 个进程 · 颜色深浅表示占用大小</div>
+    <div id="procList"></div>
+  </div>
+
+  <footer id="footNote">数据来源:adb shell /proc/meminfo + dumpsys meminfo · 1s 轮询 · 自动发现新开实例</footer>
+</div>
+
+<script>
+'use strict';
+const MAX_POINTS = 180;           // 3 分钟
+let devSeries = new Map();        // addr -> [{t, used}] used 单位 KB
+let devData = new Map();          // addr -> 最近一次采集结果
+let activeAddr = null;            // 当前选中的实例
+let inFlight = false;
+
+const $ = id => document.getElementById(id);
+const MB = kb => kb / 1024;
+
+function fmtKB(kb) {
+  if (kb == null || isNaN(kb)) return '—';
+  const mb = MB(kb);
+  if (mb >= 1024) return (mb / 1024).toFixed(2) + ' GB';
+  return Math.round(mb) + ' MB';
+}
+function fmtMBonly(kb) {
+  const mb = MB(kb);
+  return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : Math.round(mb);
+}
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function hhmmss(t) { const d = new Date(t); return d.toTimeString().slice(0, 8); }
+function activeSeries() { return devSeries.get(activeAddr) || []; }
+
+/* ---------- 状态判定(图标 + 文字,不单靠颜色) ---------- */
+function statusOf(pct) {
+  if (pct < 60) return { label: '● 正常',   color: 'var(--status-good)' };
+  if (pct < 75) return { label: '▲ 偏高',   color: 'var(--status-warning)' };
+  if (pct < 88) return { label: '▲ 紧张',   color: 'var(--status-serious)' };
+  return           { label: '■ 严重',   color: 'var(--status-critical)' };
+}
+
+/* ---------- 实例标签页 ---------- */
+function renderTabs() {
+  const devs = [...devData.values()];
+  const tabs = $('tabs');
+  if (!devs.length) { tabs.innerHTML = '<span class="tab" style="cursor:default">未发现运行中的实例(新开的实例 5 秒内自动出现)</span>'; return; }
+  tabs.innerHTML = devs.map(d => {
+    let pctTxt = '—', dotColor = 'var(--ink-muted)';
+    if (d.ok) {
+      const pct = (d.meminfo.MemTotal - d.meminfo.MemAvailable) / d.meminfo.MemTotal * 100;
+      pctTxt = pct.toFixed(0) + '%';
+      dotColor = statusOf(pct).color;
+    } else { dotColor = 'var(--status-critical)'; }
+    const name = d.label + (d.model ? ` · ${d.model}` : '');
+    const active = d.addr === activeAddr ? ' active' : '';
+    return `<div class="tab${active}" data-addr="${d.addr}">
+      <span class="tdot" style="background:${dotColor}"></span>${name}
+      <span class="pct">${pctTxt}</span></div>`;
+  }).join('');
+  tabs.querySelectorAll('.tab[data-addr]').forEach(el => {
+    el.addEventListener('click', () => {
+      activeAddr = el.dataset.addr;
+      renderAll();
+    });
+  });
+}
+
+/* ---------- KPI ---------- */
+function renderTiles(d) {
+  if (!d.ok) {
+    ['kUsed', 'kAvail', 'kCache', 'kPct', 'kTotal', 'kFree', 'kSwap', 'kDelta'].forEach(id => $(id).textContent = '—');
+    $('stText').textContent = '✕ 采集失败';
+    $('stIcon').style.background = 'var(--status-critical)';
+    $('meterFill').style.width = '0%';
+    $('sparkUsed').innerHTML = '';
+    return;
+  }
+  const mi = d.meminfo;
+  const total = mi.MemTotal, avail = mi.MemAvailable, used = total - avail;
+  const pct = used / total * 100;
+
+  $('kUsed').textContent = fmtMBonly(used); $('kUsedUnit').textContent = MB(used) >= 1024 ? '' : ' MB';
+  $('kTotal').textContent = fmtKB(total);
+  $('kAvail').textContent = fmtMBonly(avail); $('kAvailUnit').textContent = MB(avail) >= 1024 ? '' : ' MB';
+  $('kFree').textContent = fmtKB(mi.MemFree);
+  const cache = (mi.Cached || 0) + (mi.Buffers || 0);
+  $('kCache').textContent = fmtMBonly(cache); $('kCacheUnit').textContent = MB(cache) >= 1024 ? '' : ' MB';
+  const swapUsed = (mi.SwapTotal || 0) - (mi.SwapFree || 0);
+  $('kSwap').textContent = fmtKB(swapUsed);
+
+  $('kPct').textContent = pct.toFixed(1);
+  $('meterFill').style.width = pct + '%';
+  const st = statusOf(pct);
+  $('stText').textContent = st.label;
+  $('stIcon').style.background = st.color;
+
+  // 与 60s 前对比(中性色,内存上升/下降无好坏之分)
+  const series = activeSeries();
+  const past = series.find(p => p.t >= Date.now() - 61000);
+  if (past) {
+    const delta = used - past.used;
+    const sign = delta >= 0 ? '↑ +' : '↓ ';
+    $('kDelta').textContent = `1分钟 ${sign}${fmtKB(Math.abs(delta))}`;
+    $('kDelta').style.color = 'var(--ink-2)';
+  }
+  renderSpark(series);
+}
+
+/* ---------- 迷你走势 ---------- */
+function renderSpark(series) {
+  const svg = $('sparkUsed');
+  const w = svg.clientWidth || 200, h = 26;
+  if (series.length < 2) { svg.innerHTML = ''; return; }
+  const vals = series.map(p => p.used);
+  let min = Math.min(...vals), max = Math.max(...vals);
+  if (max - min < 1024) { const mid = (max + min) / 2; min = mid - 512; max = mid + 512; }
+  const x = i => (i / (series.length - 1)) * (w - 2) + 1;
+  const y = v => h - 2 - ((v - min) / (max - min)) * (h - 4);
+  const pts = series.map((p, i) => `${x(i).toFixed(1)},${y(p.used).toFixed(1)}`).join(' ');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.innerHTML = `<polyline points="${pts}" fill="none" stroke="${cssVar('--series-1')}" stroke-width="1.5" stroke-linejoin="round"/>`;
+}
+
+/* ---------- 主折线图 ---------- */
+let chartGeom = null; // 缓存几何信息给 tooltip 用
+function renderChart(series) {
+  const svg = $('chart');
+  const box = svg.parentElement.getBoundingClientRect();
+  const w = Math.max(320, box.width), h = 240;
+  const padL = 56, padR = 16, padT = 14, padB = 26;
+  const iw = w - padL - padR, ih = h - padT - padB;
+
+  if (!series || series.length < 2) {
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    svg.innerHTML = `<text x="${w / 2}" y="${h / 2}" text-anchor="middle" fill="${cssVar('--ink-muted')}" font-size="12.5">采集中…</text>`;
+    return;
+  }
+  const vals = series.map(p => p.used);
+  let min = Math.min(...vals), max = Math.max(...vals);
+  const span = Math.max(max - min, 64 * 1024); // 至少 64MB 视窗,避免抖动放大
+  min = Math.max(0, min - span * 0.15); max = max + span * 0.15;
+
+  const t0 = series[0].t, t1 = Math.max(series[series.length - 1].t, t0 + 1);
+  const X = t => padL + ((t - t0) / (t1 - t0)) * iw;
+  const Y = v => padT + ih - ((v - min) / (max - min)) * ih;
+
+  // 网格 + y 轴刻度(4 条)
+  let grid = '';
+  for (let i = 0; i <= 4; i++) {
+    const v = min + ((max - min) * i) / 4;
+    const y = Y(v).toFixed(1);
+    grid += `<line x1="${padL}" y1="${y}" x2="${w - padR}" y2="${y}" stroke="${cssVar('--grid')}" stroke-width="1"/>`
+          + `<text x="${padL - 8}" y="${+y + 4}" text-anchor="end" fill="${cssVar('--ink-muted')}" font-size="11" font-variant-numeric="tabular-nums">${fmtMBonly(v)}</text>`;
+  }
+  // x 轴时间刻度(4 个)
+  let xt = '';
+  for (let i = 0; i <= 3; i++) {
+    const t = t0 + ((t1 - t0) * i) / 3;
+    const x = X(t).toFixed(1);
+    xt += `<text x="${x}" y="${h - 8}" text-anchor="${i === 0 ? 'start' : i === 3 ? 'end' : 'middle'}" fill="${cssVar('--ink-muted')}" font-size="11" font-variant-numeric="tabular-nums">${hhmmss(t)}</text>`;
+  }
+
+  const pts = series.map(p => `${X(p.t).toFixed(1)},${Y(p.used).toFixed(1)}`);
+  const line = pts.join(' ');
+  const area = `${padL},${(padT + ih).toFixed(1)} ${line} ${X(series[series.length - 1].t).toFixed(1)},${(padT + ih).toFixed(1)}`;
+  const last = series[series.length - 1];
+  const lx = X(last.t), ly = Y(last.used);
+
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('width', w); svg.setAttribute('height', h);
+  svg.innerHTML = `
+    ${grid}${xt}
+    <line x1="${padL}" y1="${padT + ih}" x2="${w - padR}" y2="${padT + ih}" stroke="${cssVar('--baseline')}" stroke-width="1"/>
+    <path d="M${area.replace(/ /g, ' L')}" fill="${cssVar('--area-fill')}" stroke="none"/>
+    <polyline points="${line}" fill="none" stroke="${cssVar('--series-1')}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${lx}" cy="${ly}" r="4" fill="${cssVar('--series-1')}" stroke="${cssVar('--surface-1')}" stroke-width="2"/>
+    <text x="${Math.min(lx, w - padR - 60)}" y="${Math.max(ly - 10, padT + 10)}" fill="${cssVar('--ink-2')}" font-size="12" font-weight="600" font-variant-numeric="tabular-nums">${fmtMBonly(last.used)} MB</text>`;
+  chartGeom = { padL, padR, padT, padB, w, h, t0, t1, min, max, iw, ih };
+}
+
+/* tooltip:十字线 + 数值 */
+function bindChartHover() {
+  const box = document.querySelector('.chart-box');
+  const svg = $('chart'), tip = $('tooltip');
+  svg.addEventListener('mousemove', ev => {
+    const series = activeSeries();
+    if (!chartGeom || series.length < 2) return;
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.clientX - r.left) / r.width) * chartGeom.w;
+    const t = chartGeom.t0 + ((px - chartGeom.padL) / chartGeom.iw) * (chartGeom.t1 - chartGeom.t0);
+    let best = series[0];
+    for (const p of series) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+    const x = ((best.t - chartGeom.t0) / (chartGeom.t1 - chartGeom.t0)) * chartGeom.iw + chartGeom.padL;
+    const y = chartGeom.padT + chartGeom.ih - ((best.used - chartGeom.min) / (chartGeom.max - chartGeom.min)) * chartGeom.ih;
+    const prev = svg.querySelector('.xhair');
+    if (prev) prev.remove();
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'xhair');
+    g.innerHTML = `<line x1="${x}" y1="${chartGeom.padT}" x2="${x}" y2="${chartGeom.padT + chartGeom.ih}" stroke="${cssVar('--baseline')}" stroke-width="1" stroke-dasharray="3 3"/>
+      <circle cx="${x}" cy="${y}" r="4.5" fill="${cssVar('--series-1')}" stroke="${cssVar('--surface-1')}" stroke-width="2"/>`;
+    svg.appendChild(g);
+    tip.querySelector('.tt-t').textContent = hhmmss(best.t);
+    tip.querySelector('.tt-v').textContent = fmtKB(best.used) + ' 已用';
+    tip.style.display = 'block';
+    const bw = box.getBoundingClientRect();
+    let tx = ev.clientX - bw.left + 14, ty = ev.clientY - bw.top - 10;
+    if (tx + 130 > bw.width) tx -= 150;
+    tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+  });
+  svg.addEventListener('mouseleave', () => {
+    tip.style.display = 'none';
+    const p = svg.querySelector('.xhair'); if (p) p.remove();
+  });
+}
+
+/* ---------- 进程排行 ---------- */
+function renderProcs(d) {
+  if (!d.ok) { $('procList').innerHTML = '<div class="hint">此实例采集失败:' + (d.error || '') + '</div>'; return; }
+  const procs = (d.processes || []).slice(0, 10);
+  if (!procs.length) { $('procList').innerHTML = '<div class="hint">暂无数据</div>'; return; }
+  const max = procs[0].pssKb;
+  const barVars = ['--bar-1', '--bar-2', '--bar-3', '--bar-4', '--bar-5'];
+  $('procList').innerHTML = procs.map((p, i) => {
+    const color = cssVar(barVars[Math.min(i, 4)]);
+    const wPct = (p.pssKb / max * 100).toFixed(1);
+    const short = p.name.split('.').slice(-2).join('.');
+    return `<div class="proc-row" title="${p.name} (pid ${p.pid}) · PSS ${fmtKB(p.pssKb)}">
+      <div class="name">${short} <span class="pid">#${p.pid}</span></div>
+      <div class="track"><div class="bar" style="width:${wPct}%;background:${color}"></div></div>
+      <div class="val">${fmtKB(p.pssKb)}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ---------- 按当前选中实例渲染全部面板 ---------- */
+function renderAll() {
+  const d = devData.get(activeAddr);
+  if (!d) return;
+  $('chartTitle').textContent = `已用内存趋势 · ${d.label}${d.model ? ' · ' + d.model : ''}`;
+  renderTiles(d);
+  renderChart(activeSeries());
+  renderProcs(d);
+}
+
+/* ---------- 轮询 ---------- */
+async function poll() {
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    const r = await fetch('/api/stats');
+    const d = await r.json();
+    const devs = d.devices || [];
+    // 更新每个实例的数据与序列
+    for (const dev of devs) {
+      devData.set(dev.addr, dev);
+      if (dev.ok) {
+        if (!devSeries.has(dev.addr)) devSeries.set(dev.addr, []);
+        const s = devSeries.get(dev.addr);
+        s.push({ t: dev.ts, used: dev.meminfo.MemTotal - dev.meminfo.MemAvailable });
+        if (s.length > MAX_POINTS) s.shift();
+      }
+    }
+    // 清理已关闭的实例
+    for (const addr of [...devData.keys()]) {
+      if (!devs.find(v => v.addr === addr)) { devData.delete(addr); devSeries.delete(addr); }
+    }
+    // 选中实例:保持当前选择;失效则选第一个
+    if (!activeAddr || !devData.has(activeAddr)) {
+      activeAddr = devs.length ? devs[0].addr : null;
+    }
+    renderTabs();
+    renderAll();
+
+    const okCount = devs.filter(v => v.ok).length;
+    $('connDot').classList.toggle('bad', okCount === 0);
+    $('connText').textContent = okCount
+      ? `${okCount}/${devs.length} 个实例在线 · ${hhmmss(d.ts)}`
+      : '无实例在线,等待模拟器启动…';
+    const badDevs = devs.filter(v => !v.ok).map(v => `${v.label}: ${v.error}`).join(';');
+    if (badDevs && okCount === 0) {
+      $('errBanner').style.display = 'block';
+      $('errBanner').textContent = '采集失败:' + badDevs;
+    } else {
+      $('errBanner').style.display = 'none';
+    }
+  } catch (e) {
+    $('connDot').classList.add('bad');
+    $('connText').textContent = '监控服务连接失败…';
+    $('errBanner').style.display = 'block';
+    $('errBanner').textContent = '无法访问监控服务:' + e.message;
+  } finally { inFlight = false; }
+}
+
+/* ---------- 主题切换 ---------- */
+const THEMES = ['auto', 'light', 'dark'];
+let themeIdx = 0;
+$('themeBtn').addEventListener('click', () => {
+  themeIdx = (themeIdx + 1) % 3;
+  const t = THEMES[themeIdx];
+  if (t === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  renderAll();
+  renderTabs();
+});
+
+bindChartHover();
+setInterval(poll, 1000);
+poll();
+window.addEventListener('resize', () => renderAll());
+</script>
+</body>
+</html>
